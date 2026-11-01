@@ -11,6 +11,9 @@ export PATH="$HOME/.local/bin:$PATH"
 # experiments is configured on the fly. An empty value = in-memory config.
 export RCLONE_CONFIG=""
 
+# run from the repo root so logs show short relative paths
+cd "$ROOT" || exit 1
+
 section() { printf '\n==================== %s ====================\n' "$*"; }
 note()    { printf '# %s\n' "$*"; }
 # run 'command string': echo it, then run it; never abort the experiment
