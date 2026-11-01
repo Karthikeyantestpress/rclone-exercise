@@ -1,0 +1,8 @@
+# Generated sample data and transfer targets (scripts/make-sample-data.sh)
+data/
+
+# Local credentials for MinIO (copy from .env.example)
+.env
+
+# Runtime logs written by transfer.sh
+logs/
