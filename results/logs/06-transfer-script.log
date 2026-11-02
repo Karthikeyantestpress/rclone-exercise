@@ -1,0 +1,192 @@
+
+==================== Argument validation ====================
+
+$ ./transfer.sh --help | head -3
+  transfer.sh - reusable, config-free file transfers with rclone.
+  
+  Usage: transfer.sh [options] <copy|sync> <source> <destination>
+PASS  [0] help text
+
+$ ./transfer.sh copy data/source
+  expected: <copy|sync> <source> <destination>
+  transfer.sh - reusable, config-free file transfers with rclone.
+  
+  Usage: transfer.sh [options] <copy|sync> <source> <destination>
+  
+  Source/destination can be anything rclone understands, for example:
+    /srv/media                local path
+    :s3:bucket/path           on-the-fly S3, settings from RCLONE_S3_* env vars
+    store:bucket/path         named remote from RCLONE_CONFIG_STORE_* env vars
+    ":s3,provider=Other,endpoint='http://host:9000':bucket"   connection string
+  
+  Credentials are never read from an rclone.conf (the config is forced to
+  in-memory) and never passed on the command line: they come from the
+  environment, optionally loaded with --env-file (e.g. a mounted secret).
+  
+  Options:
+    -n, --dry-run            show what would happen, change nothing
+    -c, --checksum           compare by hash instead of size+modtime
+    -t, --transfers N        parallel file transfers (default 4)
+    -b, --bwlimit RATE       bandwidth limit, e.g. 10M or "08:00,5M 19:00,off"
+    -r, --retries N          whole-operation retries (default 3)
+        --verify             run `rclone check` after a successful transfer
+        --backup-dir PATH    sync only: move deleted/overwritten files here
+        --max-delete N       sync only: abort after N deletions (default 100)
+        --allow-empty-source sync only: allow syncing from an empty source
+        --env-file FILE      load credentials/remotes from FILE
+        --log-dir DIR        where to write logs (default ./logs)
+    -h, --help
+  
+  Exit codes:
+    0   success
+    64  usage error (bad arguments)
+    65  refused for safety (sync from an empty source)
+    66  verification failed (--verify found differences)
+    130 interrupted
+    other: rclone's own exit code (1 syntax, 3 dir not found, 4 file not
+    found, 5 temporary error, 6 less serious errors, 7 fatal error, ...)
+PASS  [64] missing arguments
+
+$ ./transfer.sh move data/source data/t-local
+  operation must be copy or sync, got: move
+PASS  [64] unknown operation
+
+$ ./transfer.sh --fast copy data/source data/t-local
+  unknown option: --fast
+  transfer.sh - reusable, config-free file transfers with rclone.
+  
+  Usage: transfer.sh [options] <copy|sync> <source> <destination>
+  
+  Source/destination can be anything rclone understands, for example:
+    /srv/media                local path
+    :s3:bucket/path           on-the-fly S3, settings from RCLONE_S3_* env vars
+    store:bucket/path         named remote from RCLONE_CONFIG_STORE_* env vars
+    ":s3,provider=Other,endpoint='http://host:9000':bucket"   connection string
+  
+  Credentials are never read from an rclone.conf (the config is forced to
+  in-memory) and never passed on the command line: they come from the
+  environment, optionally loaded with --env-file (e.g. a mounted secret).
+  
+  Options:
+    -n, --dry-run            show what would happen, change nothing
+    -c, --checksum           compare by hash instead of size+modtime
+    -t, --transfers N        parallel file transfers (default 4)
+    -b, --bwlimit RATE       bandwidth limit, e.g. 10M or "08:00,5M 19:00,off"
+    -r, --retries N          whole-operation retries (default 3)
+        --verify             run `rclone check` after a successful transfer
+        --backup-dir PATH    sync only: move deleted/overwritten files here
+        --max-delete N       sync only: abort after N deletions (default 100)
+        --allow-empty-source sync only: allow syncing from an empty source
+        --env-file FILE      load credentials/remotes from FILE
+        --log-dir DIR        where to write logs (default ./logs)
+    -h, --help
+  
+  Exit codes:
+    0   success
+    64  usage error (bad arguments)
+    65  refused for safety (sync from an empty source)
+    66  verification failed (--verify found differences)
+    130 interrupted
+    other: rclone's own exit code (1 syntax, 3 dir not found, 4 file not
+    found, 5 temporary error, 6 less serious errors, 7 fatal error, ...)
+PASS  [64] unknown option
+
+==================== Local -> local ====================
+
+$ ./transfer.sh --verify copy data/source data/t-local
+  2026/11/02 10:26:41 START: copy data/source -> data/t-local (transfers=4 retries=3) log=data/transfer-logs/transfer-20261102-102641-6524-copy.log
+  2026/11/02 10:26:41 VERIFIED: data/source matches data/t-local
+  2026/11/02 10:26:41 OK: copy data/source -> data/t-local in 0s
+PASS  [0] copy with verification
+
+$ ./transfer.sh copy data/source data/t-local && grep -h "nothing to transfer\|Transferred:.*0 B / 0 B" data/transfer-logs/*copy.log | tail -1
+  2026/11/02 10:26:41 START: copy data/source -> data/t-local (transfers=4 retries=3) log=data/transfer-logs/transfer-20261102-102641-6567-copy.log
+  2026/11/02 10:26:42 OK: copy data/source -> data/t-local in 0s
+  2026/11/02 10:26:42 INFO  : There was nothing to transfer
+PASS  [0] second copy transfers nothing
+
+$ ./transfer.sh copy data/does-not-exist data/t-local
+  2026/11/02 10:26:42 START: copy data/does-not-exist -> data/t-local (transfers=4 retries=3) log=data/transfer-logs/transfer-20261102-102642-6596-copy.log
+  2026/11/02 10:26:57 FAILED: copy data/does-not-exist -> data/t-local exit=3 after 15s (details in data/transfer-logs/transfer-20261102-102642-6596-copy.log)
+  2026/11/02 10:26:52 ERROR : Local file system at data/does-not-exist: error reading source root directory: directory not found
+  2026/11/02 10:26:52 ERROR : Attempt 3/3 failed with 1 errors and: directory not found
+  2026/11/02 10:26:57 NOTICE: Failed to copy: directory not found
+PASS  [3] missing source -> rclone exit 3
+
+==================== Local -> S3 (unnamed :s3: remote from RCLONE_S3_* env) ====================
+
+$ RCLONE_S3_PROVIDER=Other RCLONE_S3_ENDPOINT="$S3_A_ENDPOINT" RCLONE_S3_ACCESS_KEY_ID="$S3_A_ACCESS_KEY" RCLONE_S3_SECRET_ACCESS_KEY="$S3_A_SECRET_KEY" ./transfer.sh --verify --transfers 8 copy data/source :s3:transfer-test/upload
+  2026/11/02 10:26:57 START: copy data/source -> :s3:transfer-test/upload (transfers=8 retries=3) log=data/transfer-logs/transfer-20261102-102657-6636-copy.log
+  2026/11/02 10:26:58 VERIFIED: data/source matches :s3:transfer-test/upload
+  2026/11/02 10:26:58 OK: copy data/source -> :s3:transfer-test/upload in 1s
+PASS  [0] upload + verify
+
+==================== S3 A -> S3 B (named remotes from --env-file, different credentials) ====================
+
+$ ./transfer.sh --env-file transfer.env.example --verify copy providera:transfer-test providerb:transfer-test
+  2026/11/02 10:26:58 START: copy providera:transfer-test -> providerb:transfer-test (transfers=4 retries=3) log=data/transfer-logs/transfer-20261102-102658-6679-copy.log
+  2026/11/02 10:26:59 VERIFIED: providera:transfer-test matches providerb:transfer-test
+  2026/11/02 10:26:59 OK: copy providera:transfer-test -> providerb:transfer-test in 1s
+PASS  [0] cross-endpoint copy + verify
+
+==================== Sync safety ====================
+
+$ ./transfer.sh --env-file transfer.env.example --dry-run sync data/source/docs providerb:transfer-test/upload
+  2026/11/02 10:26:59 START: sync data/source/docs -> providerb:transfer-test/upload (transfers=4 retries=3 dry-run) log=data/transfer-logs/transfer-20261102-102659-6725-sync.log
+  2026/11/02 10:26:59 OK: sync data/source/docs -> providerb:transfer-test/upload in 0s
+PASS  [0] sync dry-run changes nothing
+
+$ RCLONE_CONFIG_B_TYPE=s3 RCLONE_CONFIG_B_PROVIDER=Other RCLONE_CONFIG_B_ENDPOINT="$S3_B_ENDPOINT" RCLONE_CONFIG_B_ACCESS_KEY_ID="$S3_B_ACCESS_KEY" RCLONE_CONFIG_B_SECRET_ACCESS_KEY="$S3_B_SECRET_KEY" rclone lsf b:transfer-test/upload/videos
+  lecture-100MB.bin
+PASS  [0] dry-run left the 100MB file in place
+
+$ ./transfer.sh --env-file transfer.env.example sync data/t-empty providerb:transfer-test
+  2026/11/02 10:27:00 REFUSED: source data/t-empty is empty or unreadable; sync would delete the destination (use --allow-empty-source to override)
+PASS  [65] sync from an empty source is refused
+
+$ ./transfer.sh --env-file transfer.env.example --backup-dir providerb:transfer-trash --verify sync data/source/pdfs providerb:transfer-test/upload
+  2026/11/02 10:27:00 START: sync data/source/pdfs -> providerb:transfer-test/upload (transfers=4 retries=3) log=data/transfer-logs/transfer-20261102-102700-6804-sync.log
+  2026/11/02 10:27:01 VERIFIED: data/source/pdfs matches providerb:transfer-test/upload
+  2026/11/02 10:27:01 OK: sync data/source/pdfs -> providerb:transfer-test/upload in 1s
+PASS  [0] sync with backup-dir
+
+==================== Failures return non-zero ====================
+
+$ RCLONE_S3_PROVIDER=Other RCLONE_S3_ENDPOINT="$S3_A_ENDPOINT" RCLONE_S3_ACCESS_KEY_ID=wrong RCLONE_S3_SECRET_ACCESS_KEY=wrong ./transfer.sh --retries 1 copy data/source/docs :s3:transfer-test/x
+  2026/11/02 10:27:01 START: copy data/source/docs -> :s3:transfer-test/x (transfers=4 retries=1) log=data/transfer-logs/transfer-20261102-102701-6862-copy.log
+  2026/11/02 10:27:01 FAILED: copy data/source/docs -> :s3:transfer-test/x exit=1 after 0s (details in data/transfer-logs/transfer-20261102-102701-6862-copy.log)
+PASS  [1] wrong credentials fail (after retries)
+
+$ ./transfer.sh --env-file nope.env copy data/source data/t-local
+  cannot read env file: nope.env
+PASS  [64] unreadable env file
+
+==================== Logs ====================
+
+$ ls data/transfer-logs | head -5
+transfer-20261102-102641-6524-copy.log
+transfer-20261102-102641-6567-copy.log
+transfer-20261102-102642-6596-copy.log
+transfer-20261102-102657-6636-copy.log
+transfer-20261102-102658-6679-copy.log
+
+$ grep -hE "START|OK|FAILED|REFUSED|VERIFIED" data/transfer-logs/*.log | cut -c1-160 | head -12
+2026/11/02 10:26:41 START: copy data/source -> data/t-local (transfers=4 retries=3) log=data/transfer-logs/transfer-20261102-102641-6524-copy.log
+2026/11/02 10:26:41 VERIFIED: data/source matches data/t-local
+2026/11/02 10:26:41 OK: copy data/source -> data/t-local in 0s
+2026/11/02 10:26:41 START: copy data/source -> data/t-local (transfers=4 retries=3) log=data/transfer-logs/transfer-20261102-102641-6567-copy.log
+2026/11/02 10:26:42 OK: copy data/source -> data/t-local in 0s
+2026/11/02 10:26:42 START: copy data/does-not-exist -> data/t-local (transfers=4 retries=3) log=data/transfer-logs/transfer-20261102-102642-6596-copy.log
+2026/11/02 10:26:57 FAILED: copy data/does-not-exist -> data/t-local exit=3 after 15s (details in data/transfer-logs/transfer-20261102-102642-6596-copy.log)
+2026/11/02 10:26:57 START: copy data/source -> :s3:transfer-test/upload (transfers=8 retries=3) log=data/transfer-logs/transfer-20261102-102657-6636-copy.log
+2026/11/02 10:26:58 VERIFIED: data/source matches :s3:transfer-test/upload
+2026/11/02 10:26:58 OK: copy data/source -> :s3:transfer-test/upload in 1s
+2026/11/02 10:26:58 START: copy providera:transfer-test -> providerb:transfer-test (transfers=4 retries=3) log=data/transfer-logs/transfer-20261102-102658-6679-
+2026/11/02 10:26:59 VERIFIED: providera:transfer-test matches providerb:transfer-test
+# no secret values in any log:
+
+$ for s in "$S3_A_SECRET_KEY" "$S3_B_SECRET_KEY"; do grep -rl -- "$s" data/transfer-logs && echo LEAK; done; echo "(none found)"
+(none found)
+
+==================== Summary ====================
+passed: 15  failed: 0
