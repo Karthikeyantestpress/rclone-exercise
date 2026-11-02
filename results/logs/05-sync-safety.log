@@ -1,0 +1,160 @@
+
+==================== 0. Starting point: destination has version 1 ====================
+
+$ rclone sync data/sync-src :s3:site -v --stats 0
+2026/11/02 10:24:48 INFO  : S3 bucket site: Bucket "site" created with ACL ""
+2026/11/02 10:24:48 INFO  : pages/about.html: Copied (new)
+2026/11/02 10:24:48 INFO  : pages/pricing.html: Copied (new)
+2026/11/02 10:24:48 INFO  : pages/index.html: Copied (new)
+2026/11/02 10:24:48 INFO  : assets/logo.svg: Copied (new)
+# someone uploads a file straight to the destination (not in the source)
+
+$ echo "manual upload" | rclone rcat :s3:site/assets/hand-uploaded.pdf
+
+==================== 1. Source moves on to version 2 ====================
+
+$ echo "home v2 - new hero section" > data/sync-src/pages/index.html          # modified
+
+$ rm data/sync-src/pages/pricing.html                                         # deleted
+
+$ mv data/sync-src/pages/about.html data/sync-src/pages/about-us.html         # renamed
+
+$ echo "careers v1" > data/sync-src/pages/careers.html                        # new
+
+$ rclone tree data/sync-src
+/
+├── assets
+│   └── logo.svg
+└── pages
+    ├── about-us.html
+    ├── careers.html
+    └── index.html
+
+2 directories, 4 files
+
+==================== 2. What differs? (read-only) ====================
+
+$ rclone check data/sync-src :s3:site --combined - 2>/dev/null   # = same  * differ  + only src  - only dst
+- assets/hand-uploaded.pdf
+= assets/logo.svg
++ pages/about-us.html
+- pages/about.html
++ pages/careers.html
+- pages/pricing.html
+* pages/index.html
+(exit code 1)
+
+==================== 3. --dry-run: what would sync do? ====================
+
+$ rclone sync data/sync-src :s3:site --dry-run 2>&1 | grep -E "Skipped|Deleted:|Transferred:"
+2026/11/02 10:24:49 NOTICE: pages/about-us.html: Skipped copy as --dry-run is set (size 9)
+2026/11/02 10:24:49 NOTICE: pages/careers.html: Skipped copy as --dry-run is set (size 11)
+2026/11/02 10:24:49 NOTICE: pages/index.html: Skipped copy as --dry-run is set (size 27)
+2026/11/02 10:24:49 NOTICE: pages/about.html: Skipped delete as --dry-run is set (size 9)
+2026/11/02 10:24:49 NOTICE: pages/pricing.html: Skipped delete as --dry-run is set (size 11)
+2026/11/02 10:24:49 NOTICE: assets/hand-uploaded.pdf: Skipped delete as --dry-run is set (size 14)
+Transferred:   	         47 B / 47 B, 100%, 0 B/s, ETA -
+Deleted:                3 (files), 0 (dirs), 34 B (freed)
+Transferred:            3 / 3, 100%
+# sync would DELETE pricing.html, about.html (renames look like delete + new) AND hand-uploaded.pdf
+
+==================== 4. Sync, keeping everything it replaces or deletes ====================
+# --backup-dir moves deleted/overwritten objects aside instead of destroying them (server-side, no re-upload)
+
+$ rclone sync data/sync-src :s3:site --backup-dir :s3:site-trash/$(date +%F) -v --stats 0
+2026/11/02 10:24:49 INFO  : S3 bucket site-trash path 2026-11-02: Bucket "site-trash" created with ACL ""
+2026/11/02 10:24:49 INFO  : pages/careers.html: Copied (new)
+2026/11/02 10:24:49 INFO  : pages/about-us.html: Copied (new)
+2026/11/02 10:24:49 INFO  : pages/index.html: Copied (server-side copy)
+2026/11/02 10:24:49 INFO  : pages/index.html: Deleted
+2026/11/02 10:24:49 INFO  : pages/index.html: Copied (new)
+2026/11/02 10:24:49 INFO  : pages/about.html: Copied (server-side copy)
+2026/11/02 10:24:49 INFO  : pages/pricing.html: Copied (server-side copy)
+2026/11/02 10:24:49 INFO  : assets/hand-uploaded.pdf: Copied (server-side copy)
+2026/11/02 10:24:49 INFO  : pages/about.html: Deleted
+2026/11/02 10:24:49 INFO  : pages/about.html: Moved into backup dir
+2026/11/02 10:24:49 INFO  : pages/pricing.html: Deleted
+2026/11/02 10:24:49 INFO  : pages/pricing.html: Moved into backup dir
+2026/11/02 10:24:49 INFO  : assets/hand-uploaded.pdf: Deleted
+2026/11/02 10:24:49 INFO  : assets/hand-uploaded.pdf: Moved into backup dir
+
+$ rclone tree :s3:site
+/
+├── assets
+│   └── logo.svg
+└── pages
+    ├── about-us.html
+    ├── careers.html
+    └── index.html
+
+2 directories, 4 files
+
+$ rclone tree :s3:site-trash     # nothing lost: old versions + the manual upload are recoverable
+/
+└── 2026-11-02
+    ├── assets
+    │   └── hand-uploaded.pdf
+    └── pages
+        ├── about.html
+        ├── index.html
+        └── pricing.html
+
+3 directories, 4 files
+
+$ rclone cat :s3:site-trash/$(date +%F)/pages/index.html   # the v1 page
+home v1
+
+==================== 5. Verify ====================
+
+$ rclone check data/sync-src :s3:site
+2026/11/02 10:24:50 NOTICE: S3 bucket site: 0 differences found
+2026/11/02 10:24:50 NOTICE: S3 bucket site: 4 matching files
+# --download compares actual bytes (for backends without a usable hash)
+
+$ rclone check data/sync-src :s3:site --download
+2026/11/02 10:24:50 NOTICE: S3 bucket site: 0 differences found
+2026/11/02 10:24:50 NOTICE: S3 bucket site: 4 matching files
+
+==================== 6. Why sync is dangerous ====================
+# mistake 1: an empty or wrong source (failed mount, typo, unset variable) = delete everything at the destination
+
+$ mkdir -p data/empty-dir
+
+$ rclone sync data/empty-dir :s3:site --dry-run 2>&1 | grep -E "Skipped delete|Deleted:"
+2026/11/02 10:24:50 NOTICE: pages/about-us.html: Skipped delete as --dry-run is set (size 9)
+2026/11/02 10:24:50 NOTICE: pages/index.html: Skipped delete as --dry-run is set (size 27)
+2026/11/02 10:24:50 NOTICE: pages/careers.html: Skipped delete as --dry-run is set (size 11)
+2026/11/02 10:24:50 NOTICE: assets/logo.svg: Skipped delete as --dry-run is set (size 8)
+Deleted:                4 (files), 0 (dirs), 55 B (freed)
+# guard rail: --max-delete aborts once more than N deletes would happen
+
+$ rclone sync data/empty-dir :s3:site --max-delete 2 -v --stats 0 2>&1 | grep -E "Deleted|ERROR|NOTICE|error" | head -6
+2026/11/02 10:24:50 ERROR : pages/index.html: Got fatal error on delete: --max-delete threshold reached
+2026/11/02 10:24:50 ERROR : assets/logo.svg: Got fatal error on delete: --max-delete threshold reached
+2026/11/02 10:24:50 INFO  : pages/careers.html: Deleted
+2026/11/02 10:24:50 INFO  : pages/about-us.html: Deleted
+2026/11/02 10:24:50 ERROR : Cancelling sync due to fatal error: failed to delete 2 files
+2026/11/02 10:24:50 ERROR : S3 bucket site: not deleting directories as there were IO errors
+
+$ rclone ls :s3:site
+        8 assets/logo.svg
+       27 pages/index.html
+# the abort stopped further deletes, but up to N files may already be gone; --dry-run first is the real protection
+
+$ rclone sync data/sync-src :s3:site -v --stats 0   # restore
+2026/11/02 10:24:51 INFO  : pages/careers.html: Copied (new)
+2026/11/02 10:24:51 INFO  : pages/about-us.html: Copied (new)
+# mistake 2: swapped arguments make the DESTINATION the truth and wipe the source's new work:
+
+$ echo "blog draft, not uploaded yet" > data/sync-src/pages/blog.html
+
+$ rclone sync :s3:site data/sync-src --dry-run 2>&1 | grep -E "Skipped|Deleted:"
+2026/11/02 10:24:51 NOTICE: pages/blog.html: Skipped delete as --dry-run is set (size 29)
+Deleted:                1 (files), 0 (dirs), 29 B (freed)
+# the brand-new local draft would be deleted from the SOURCE. copy would never do this.
+# mistake 3: --delete-excluded with a filter deletes every destination file the filter excludes
+
+==================== 7. Safe habits ====================
+# use copy unless deletions are really wanted; always --dry-run a new sync first
+# --backup-dir (or bucket versioning) so a bad sync is recoverable; --max-delete as a tripwire
+# in scripts, refuse to sync from an empty source and quote paths so an unset variable can't become '/'
