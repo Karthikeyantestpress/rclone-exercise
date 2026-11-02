@@ -1,0 +1,140 @@
+
+==================== 1. Server-side copy vs download + re-upload ====================
+# same endpoint: rclone sends CopyObject, the server copies internally, no bytes pass through this machine
+
+$ time rclone copy prova:bonus/big prova:bonus-copy/server-side -v --stats 0 2>&1 | grep -E "Copied|Server Side"
+2026/11/02 10:32:12 INFO  : upload-1GB.bin: Copied (server-side copy)
+elapsed: 11.950s
+# --disable copy forces rclone to download and re-upload the same 1GB
+
+$ time rclone copy prova:bonus/big prova:bonus-copy/streamed --disable copy -v --stats 0 2>&1 | grep -E "Copied"
+2026/11/02 10:32:33 INFO  : upload-1GB.bin: Multi-thread Copied (new)
+elapsed: 21.167s
+# different endpoints (provider A -> provider B): server-side copy is impossible, data streams through this machine without touching its disk
+
+$ time rclone copy prova:bonus/big provb:bonus/big -v --stats 0 2>&1 | grep -E "Copied"
+2026/11/02 10:32:48 INFO  : upload-1GB.bin: Multi-thread Copied (new)
+elapsed: 14.665s
+
+$ rclone check prova:bonus/big provb:bonus/big
+2026/11/02 10:32:48 NOTICE: S3 bucket bonus path big: 0 differences found
+2026/11/02 10:32:48 NOTICE: S3 bucket bonus path big: 1 matching files
+
+==================== 2. Tuning: --transfers, --checkers, --multi-thread-streams ====================
+# 300 x 8KB files: per-file overhead dominates, parallel transfers help most
+
+$ time rclone copy data/small prova:bonus/small-t1 --transfers 1 --stats 0
+elapsed: 0.515s
+
+$ time rclone copy data/small prova:bonus/small-t16 --transfers 16 --stats 0
+elapsed: 0.375s
+# re-running over existing files only checks; --checkers sets how many comparisons run in parallel
+
+$ time rclone copy data/small prova:bonus/small-t16 --checkers 1 --stats 0
+elapsed: 0.279s
+
+$ time rclone copy data/small prova:bonus/small-t16 --checkers 16 --stats 0
+elapsed: 0.183s
+# one big download: --multi-thread-streams splits it into ranged GETs in parallel
+
+$ time rclone copy prova:bonus/big data/dl-1 --multi-thread-streams 1 --stats 0
+elapsed: 13.634s
+
+$ time rclone copy prova:bonus/big data/dl-4 --multi-thread-streams 4 --multi-thread-cutoff 64M --stats 0
+elapsed: 18.217s
+
+==================== 3. Client-side encryption with crypt (no config file either) ====================
+# crypt wraps another remote; the password is passed obscured (obscuring is NOT encryption, it only stops shoulder-surfing)
+
+$ export RCLONE_CONFIG_VAULT_TYPE=crypt RCLONE_CONFIG_VAULT_REMOTE=prova:vault RCLONE_CONFIG_VAULT_PASSWORD="$(rclone obscure "demo-passphrase-from-a-secret-store")"
+
+$ rclone copy data/source/pdfs vault: -v --stats 0 2>&1 | grep Copied
+2026/11/02 10:33:22 INFO  : invoice-001.pdf: Copied (new)
+2026/11/02 10:33:22 INFO  : reports/q3-report.pdf: Copied (new)
+
+$ rclone ls vault:            # through crypt: real names
+      596 reports/q3-report.pdf
+      598 invoice-001.pdf
+
+$ rclone ls prova:vault       # what the storage provider sees: encrypted names and contents
+      644 eoepn5mb92k2eskcrfmdk9allo/liqkilqjchocvji3rd69pf4qmk
+      646 uokogui8cuauaheiagu32rr3ro
+
+$ rclone cat prova:vault/$(rclone lsf prova:vault --files-only | head -1) | head -c 64 | od -c | head -3
+0000000   R   C   L   O   N   E  \0  \0 376   T 262 230 212 331 224 222
+0000020   v 220 330   v   $   = 022   P 265 204   - 265   U   T 237 233
+0000040 250 220 030 344   %   - 304 214   W 336   l   s 254   5 342 254
+
+$ rclone cryptcheck data/source/pdfs vault:   # verify without downloading
+2026/11/02 10:33:23 NOTICE: Encrypted drive 'vault{Qmx5Z}:': 0 differences found
+2026/11/02 10:33:23 NOTICE: Encrypted drive 'vault{Qmx5Z}:': 2 matching files
+
+==================== 4. rclone mount (FUSE) and its limitations ====================
+
+$ rclone mount prova:bonus data/mnt --vfs-cache-mode writes --daemon --daemon-wait 10s && echo mounted
+mounted
+
+$ ls data/mnt; ls -la data/mnt/big
+big
+renamed.txt
+small-t1
+small-t16
+total 1048576
+drwxr-xr-x 1 karthik karthik          0 Jan  1  2000 .
+drwxr-xr-x 1 karthik karthik          0 Nov  2 10:33 ..
+-rw-r--r-- 1 karthik karthik 1073741824 Nov  1 16:46 upload-1GB.bin
+
+$ echo "written through the mount" > data/mnt/note.txt && rclone cat prova:bonus/note.txt || echo "(not on S3 yet)"
+# with --vfs-cache-mode writes the file is written to a local cache and uploaded after close (--vfs-write-back, default 5s)
+
+$ sleep 7; rclone cat prova:bonus/note.txt
+written through the mount
+
+$ time md5sum data/mnt/big/upload-1GB.bin   # every read becomes HTTP range requests to the server
+96b31960d17bf6a676e6b37bd9c29017  data/mnt/big/upload-1GB.bin
+elapsed: 2.202s
+
+$ mv data/mnt/note.txt data/mnt/renamed.txt; sleep 2; rclone lsf prova:bonus --files-only   # S3 has no rename: server-side copy + delete
+renamed.txt
+
+$ fusermount -u data/mnt && echo unmounted
+unmounted
+# limitations: no file locking, no hard links, rename = copy+delete, random writes need --vfs-cache-mode writes/full
+# (local disk cache), listings are slow on big buckets, changes from other clients appear only after --dir-cache-time.
+# fine for browsing or simple tools; use copy/sync for bulk transfers and pipelines
+
+==================== 5. Scheduled sync with a systemd timer (transient, nothing installed) ====================
+
+$ systemd-analyze verify examples/systemd/rclone-backup.timer 2>&1 | grep "rclone-backup.timer" || echo "no problems reported for rclone-backup.timer"
+no problems reported for rclone-backup.timer
+# run transfer.sh from a transient user timer firing 2s from now, passing credentials via the unit environment
+
+$ systemd-run --user --quiet --unit rclone-demo --on-active=2s --timer-property=AccuracySec=100ms \
+  --setenv=RCLONE_S3_PROVIDER=Other --setenv=RCLONE_S3_ENDPOINT="$S3_A_ENDPOINT" \
+  --setenv=RCLONE_S3_ACCESS_KEY_ID="$S3_A_ACCESS_KEY" --setenv=RCLONE_S3_SECRET_ACCESS_KEY="$S3_A_SECRET_KEY" \
+  --setenv=PATH="$PATH" --working-directory="$ROOT" \
+  ./transfer.sh --log-dir data/transfer-logs --verify copy data/source/docs :s3:bonus/scheduled && echo "timer scheduled"
+timer scheduled
+
+$ journalctl --user -u rclone-demo --no-pager -o cat | grep -E "START|VERIFIED|OK|FAILED"
+2026/11/02 10:30:46 VERIFIED: data/source/docs matches :s3:bonus/scheduled
+2026/11/02 10:30:46 OK: copy data/source/docs -> :s3:bonus/scheduled in 1s
+2026/11/02 10:33:42 VERIFIED: data/source/docs matches :s3:bonus/scheduled
+2026/11/02 10:33:42 OK: copy data/source/docs -> :s3:bonus/scheduled in 0s
+
+$ rclone lsf -R prova:bonus/scheduled
+notes/2026/meeting-notes.txt
+notes/2026/todo.txt
+readme.txt
+notes/
+notes/2026/
+
+==================== 6. Calling rclone from Python (Celery-style) ====================
+
+$ python3 examples/python/run_rclone.py data/source/pdfs :s3:bonus/python
+{"bytes": 1194, "transfers": 2, "checks": 0, "errors": 0, "elapsedTime": 0.003829372}
+# a failing transfer surfaces as an exception with rclone's exit code:
+
+$ S3_A_SECRET_KEY=wrong python3 examples/python/run_rclone.py data/source/pdfs :s3:bonus/python-bad
+transfer failed: rclone exited with 1: Failed to create file system for ":s3:bonus/python-bad": is a file not a directory
+(exit code 1)

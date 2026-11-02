@@ -1,0 +1,12 @@
+[Unit]
+Description=Run rclone-backup.service every night
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+# spread load if many servers share the same schedule
+RandomizedDelaySec=15min
+# run at next boot if the machine was off at 02:30
+Persistent=true
+
+[Install]
+WantedBy=timers.target

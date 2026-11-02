@@ -1,0 +1,18 @@
+# Nightly backup of /srv/media to S3 using transfer.sh, no rclone.conf.
+# Install (system-wide):
+#   sudo cp rclone-backup.service rclone-backup.timer /etc/systemd/system/
+#   sudo systemctl enable --now rclone-backup.timer
+[Unit]
+Description=Back up media to S3 with rclone
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=backup
+# Credentials as RCLONE_CONFIG_BACKUP_* variables, readable by root only (chmod 600).
+EnvironmentFile=/etc/rclone/backup.env
+ExecStart=/opt/rclone-exercise/transfer.sh --verify --log-dir /var/log/rclone copy /srv/media backup:media-backup
+# don't let a huge first sync hog the machine
+Nice=10
+IOSchedulingClass=idle

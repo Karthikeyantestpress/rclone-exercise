@@ -1,0 +1,5 @@
+# Cron alternative to the systemd timer (crontab -e).
+# flock -n: skip this run if the previous one is still going, so two syncs
+# never write to the same destination at once.
+# The env file holds RCLONE_CONFIG_BACKUP_* variables (chmod 600).
+30 2 * * * flock -n /tmp/rclone-backup.lock /opt/rclone-exercise/transfer.sh --env-file /etc/rclone/backup.env --verify --log-dir /var/log/rclone copy /srv/media backup:media-backup
