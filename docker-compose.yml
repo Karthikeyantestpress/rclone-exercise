@@ -1,0 +1,43 @@
+# Two independent S3-compatible endpoints, standing in for two different
+# storage providers (e.g. AWS S3 and DigitalOcean Spaces). Each has its own
+# credentials, read from .env (see .env.example), never hardcoded here.
+#
+#   s3-a  http://127.0.0.1:9000
+#   s3-b  http://127.0.0.1:9100
+#
+# Start:  docker compose up -d
+# Stop:   docker compose down          (add -v to also delete stored objects)
+#
+# Server: `rclone serve s3`, rclone's built-in S3-compatible server (AWS
+# Signature v4 auth, buckets, multipart uploads, server-side CopyObject).
+# MinIO was the first choice, but its community images and binaries are no
+# longer published (minio/minio is gone from Docker Hub, dl.min.io returns
+# 410). scripts/s3-servers.sh runs the same servers without Docker.
+
+x-s3: &s3
+  image: rclone/rclone:1.75.2
+  restart: unless-stopped
+  command: ["serve", "s3", "/data", "--addr", ":9000", "--etag-hash", "MD5", "-v"]
+
+services:
+  s3-a:
+    <<: *s3
+    container_name: s3-a
+    ports: ["127.0.0.1:9000:9000"]
+    environment:
+      # rclone parses list-valued env vars as CSV, so the "key,secret" pair
+      # is wrapped in double quotes to stay one entry.
+      RCLONE_AUTH_KEY: '"${S3_A_ACCESS_KEY:?set in .env},${S3_A_SECRET_KEY:?set in .env}"'
+    volumes: [s3-a-data:/data]
+
+  s3-b:
+    <<: *s3
+    container_name: s3-b
+    ports: ["127.0.0.1:9100:9000"]
+    environment:
+      RCLONE_AUTH_KEY: '"${S3_B_ACCESS_KEY:?set in .env},${S3_B_SECRET_KEY:?set in .env}"'
+    volumes: [s3-b-data:/data]
+
+volumes:
+  s3-a-data:
+  s3-b-data:
