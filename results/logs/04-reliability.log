@@ -1,0 +1,154 @@
+
+==================== 1. Upload a 1GB file (multipart) ====================
+# files above --s3-upload-cutoff (200M default) go up as multipart: chunks uploaded in parallel
+
+$ time rclone copy data/big/upload-1GB.bin :s3:big/single/ --s3-chunk-size 64M --s3-upload-concurrency 4 --stats 5s --stats-one-line -v
+2026/11/02 10:22:20 INFO  :         1 GiB / 1 GiB, 100%, 241.125 MiB/s, ETA 0s
+2026/11/02 10:22:22 INFO  : upload-1GB.bin: Multi-thread Copied (new)
+2026/11/02 10:22:22 INFO  :         1 GiB / 1 GiB, 100%, 170.667 MiB/s, ETA 0s
+elapsed: 5.583s
+
+$ rclone ls :s3:big/single
+1073741824 upload-1GB.bin
+# multipart ETags are not plain MD5s; rclone stores the MD5 as object metadata, so check still verifies content
+
+$ rclone check data/big :s3:big/single
+2026/11/02 10:22:23 NOTICE: S3 bucket big path single: 0 differences found
+2026/11/02 10:22:23 NOTICE: S3 bucket big path single: 1 matching files
+
+==================== 2. Concurrent transfers (--transfers) ====================
+# 6 x 25MB files, one at a time vs. all six in parallel
+
+$ time rclone copy data/reliability :s3:big/t1 --exclude upload-1GB.bin --transfers 1 --stats-one-line --stats 0
+elapsed: 1.101s
+
+$ time rclone copy data/reliability :s3:big/t6 --exclude upload-1GB.bin --transfers 6 --stats-one-line --stats 0
+elapsed: 0.377s
+# with network latency per request (real S3), more transfers hide latency; on loopback the disk/CPU dominate
+
+==================== 3. Bandwidth limit (--bwlimit) ====================
+
+$ time rclone copy data/source/videos/lecture-100MB.bin :s3:big/bw/ --bwlimit 20M --stats 2s --stats-one-line -v
+2026/11/02 10:22:25 INFO  : Starting bandwidth limiter at 20Mi Byte/s
+2026/11/02 10:22:27 INFO  :    40.027 MiB / 100 MiB, 40%, 20.089 MiB/s, ETA 2s
+2026/11/02 10:22:29 INFO  :    80.059 MiB / 100 MiB, 80%, 20.019 MiB/s, ETA 0s
+2026/11/02 10:22:30 INFO  : lecture-100MB.bin: Copied (new)
+2026/11/02 10:22:30 INFO  :       100 MiB / 100 MiB, 100%, 20.000 MiB/s, ETA 0s
+elapsed: 5.296s
+# 100MB at 20MiB/s should take ~5s. --bwlimit also takes a timetable, e.g. "08:00,5M 19:00,off"
+
+==================== 4. Progress and statistics ====================
+# --progress redraws one live block in a terminal; for logs use periodic stats lines:
+
+$ rclone copy data/reliability :s3:big/stats --exclude upload-1GB.bin --transfers 2 --bwlimit 50M --stats 1s -v 2>&1 | grep -E "Transferred:|Elapsed|ETA" | head -12
+Transferred:   	   47.273 MiB / 150 MiB, 32%, 0 B/s, ETA -
+Transferred:            0 / 6, 0%
+Elapsed time:         0.8s
+Transferred:   	   97.152 MiB / 150 MiB, 65%, 49.998 MiB/s, ETA 1s
+Transferred:            2 / 6, 33%
+Elapsed time:         1.8s
+Transferred:   	  147.184 MiB / 150 MiB, 98%, 51.169 MiB/s, ETA 0s
+Transferred:            4 / 6, 67%
+Elapsed time:         2.8s
+Transferred:   	      150 MiB / 150 MiB, 100%, 51.169 MiB/s, ETA 0s
+Transferred:            6 / 6, 100%
+Elapsed time:         2.9s
+# machine-readable stats for monitoring:
+
+$ rclone copy data/source/docs :s3:big/json --use-json-log --stats 1s -v 2>&1 | grep -m1 "\"stats\"" | cut -c1-300
+{"time":"2026-11-02T10:22:34.096697657+05:30","level":"info","msg":"\nTransferred:   \t        142 B / 142 B, 100%, 0 B/s, ETA -\nChecks:                 0 / 0, -, Listed 5\nTransferred:            3 / 3, 100%\nElapsed time:         0.0s\n\n","stats":{"bytes":142,"checks":0,"deletedDirs":0,"deletes"
+
+==================== 5. Retries while the server goes away ====================
+# server A is killed (SIGKILL) 3s into a 100MB upload and restarted 6s later; -vv shows the retry messages
+# --low-level-retries retries individual HTTP requests; --retries re-runs the whole sync for files that still failed
+
+$ ( sleep 3; kill_a; echo ">>> $(date +%T) server A killed"; sleep 6; restart_a; echo ">>> $(date +%T) server A restarted" ) &
+rclone copy data/source/videos/lecture-100MB.bin :s3:big/retry/ --bwlimit 10M --retries 5 --retries-sleep 3s --low-level-retries 3 --timeout 5s --contimeout 2s -vv --stats 0 2>&1 | grep -E "low level retry|Attempt|Failed to copy|Copied" | cut -c1-170
+wait
+>>> 10:22:37 server A killed
+>>> 10:22:44 server A restarted
+2026/11/02 10:22:37 DEBUG : pacer: low level retry 1/1 (error operation error S3: PutObject, exceeded maximum number of attempts, 1, https response error StatusCode: 0, R
+2026/11/02 10:22:37 DEBUG : lecture-100MB.bin: Received error: operation error S3: PutObject, exceeded maximum number of attempts, 1, https response error StatusCode: 0, 
+2026/11/02 10:22:37 DEBUG : pacer: low level retry 1/1 (error operation error S3: PutObject, exceeded maximum number of attempts, 1, https response error StatusCode: 0, R
+2026/11/02 10:22:37 DEBUG : lecture-100MB.bin: Received error: operation error S3: PutObject, exceeded maximum number of attempts, 1, https response error StatusCode: 0, 
+2026/11/02 10:22:37 DEBUG : pacer: low level retry 1/1 (error operation error S3: PutObject, exceeded maximum number of attempts, 1, https response error StatusCode: 0, R
+2026/11/02 10:22:37 DEBUG : lecture-100MB.bin: Received error: operation error S3: PutObject, exceeded maximum number of attempts, 1, https response error StatusCode: 0, 
+2026/11/02 10:22:37 ERROR : lecture-100MB.bin: Failed to copy: operation error S3: PutObject, exceeded maximum number of attempts, 1, https response error StatusCode: 0, 
+2026/11/02 10:22:37 ERROR : Attempt 1/5 failed with 1 errors and: operation error S3: PutObject, exceeded maximum number of attempts, 1, https response error StatusCode: 
+2026/11/02 10:22:52 INFO  : lecture-100MB.bin: Copied (new)
+2026/11/02 10:22:52 ERROR : Attempt 2/5 succeeded
+
+$ rclone check data/source/videos :s3:big/retry
+2026/11/02 10:22:52 NOTICE: S3 bucket big path retry: 0 differences found
+2026/11/02 10:22:52 NOTICE: S3 bucket big path retry: 1 matching files
+
+==================== 6. Interrupted transfer, then restart ====================
+# simulate a crash: SIGKILL rclone 15s into uploading 6x25MB + 1GB (no chance to clean up)
+
+$ timeout -s KILL 15 rclone copy data/reliability :s3:big/resume --transfers 2 --bwlimit 40M -v --stats 0 2>&1 | grep -E "Copied|ERROR"
+2026/11/02 10:22:53 INFO  : part-2-25MB.bin: Copied (new)
+2026/11/02 10:22:53 INFO  : part-1-25MB.bin: Copied (new)
+2026/11/02 10:22:55 INFO  : part-3-25MB.bin: Copied (new)
+2026/11/02 10:22:55 INFO  : part-4-25MB.bin: Copied (new)
+2026/11/02 10:22:56 INFO  : part-5-25MB.bin: Copied (new)
+2026/11/02 10:22:56 INFO  : part-6-25MB.bin: Copied (new)
+
+$ rclone ls :s3:big/resume   # what made it before the crash
+ 26214400 part-1-25MB.bin
+ 26214400 part-2-25MB.bin
+ 26214400 part-3-25MB.bin
+ 26214400 part-4-25MB.bin
+ 26214400 part-5-25MB.bin
+ 26214400 part-6-25MB.bin
+# the half-uploaded 1GB file is not visible as an object, but its parts sit on the server as an unfinished multipart upload
+
+$ rclone backend list-multipart-uploads :s3:big
+{
+	"big": [
+		{
+			"ChecksumAlgorithm": "",
+			"ChecksumType": "",
+			"Initiated": "2026-11-02T04:52:57.645Z",
+			"Initiator": null,
+			"Key": "resume/upload-1GB.bin",
+			"Owner": null,
+			"StorageClass": "STANDARD",
+			"UploadId": "39560d10-e6ca-4835-8ef1-6af211c05ded"
+		}
+	]
+}
+# restart the same command: finished files are skipped (only checked), unfinished ones transferred
+
+$ time rclone copy data/reliability :s3:big/resume --transfers 2 -v --stats 0 2>&1 | grep -E "Copied|ERROR|nothing to transfer"
+2026/11/02 10:23:17 INFO  : upload-1GB.bin: Multi-thread Copied (new)
+elapsed: 10.494s
+
+$ rclone check data/reliability :s3:big/resume
+2026/11/02 10:23:19 NOTICE: S3 bucket big path resume: 0 differences found
+2026/11/02 10:23:20 NOTICE: S3 bucket big path resume: 7 matching files
+# abandoned multipart parts cost storage on real S3: clean them up (or use a bucket lifecycle rule)
+
+$ rclone backend cleanup :s3:big -o max-age=0s
+
+$ rclone backend list-multipart-uploads :s3:big
+{
+	"big": []
+}
+
+==================== 7. Local destination: .partial files ====================
+# for local/SFTP destinations rclone writes to <name>.<random>.partial and renames on success
+
+$ timeout -s KILL 2 rclone copy data/big data/local-resume --bwlimit 100M -v --stats 0; ls -la data/local-resume
+2026/11/02 10:23:27 INFO  : Starting bandwidth limiter at 100Mi Byte/s
+experiments/lib.sh: line 32:  5325 Killed                  timeout -s KILL 2 rclone copy data/big data/local-resume --bwlimit 100M -v --stats 0
+total 1048588
+drwxr-xr-x  2 karthik karthik      4096 Nov  2 10:23 .
+drwxr-xr-x 13 karthik karthik      4096 Nov  2 10:23 ..
+-rw-r--r--  1 karthik karthik 193449984 Nov  2 10:23 upload-1GB.bin.c7a93da1.partial
+
+$ rclone copy data/big data/local-resume -v --stats 0 2>&1 | grep -E "Copied|nothing"; ls -la data/local-resume
+2026/11/02 10:23:42 INFO  : upload-1GB.bin: Copied (new)
+total 1048588
+drwxr-xr-x  2 karthik karthik       4096 Nov  2 10:23 .
+drwxr-xr-x 13 karthik karthik       4096 Nov  2 10:23 ..
+-rw-r--r--  1 karthik karthik 1073741824 Nov  1 16:46 upload-1GB.bin
