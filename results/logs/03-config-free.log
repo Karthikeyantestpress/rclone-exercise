@@ -1,0 +1,123 @@
+
+==================== 0. Prove there is no usable config ====================
+
+$ rclone config file
+Configuration is in memory only
+
+$ ls -l ~/.config/rclone/rclone.conf 2>&1   # the default path does not exist either
+ls: cannot access '/home/karthik/.config/rclone/rclone.conf': No such file or directory
+(exit code 2)
+# an explicitly EMPTY config file works the same way:
+
+$ rclone --config data/empty-rclone.conf listremotes; echo "remotes defined: $(rclone --config data/empty-rclone.conf listremotes | wc -l)"
+remotes defined: 0
+
+==================== A. On-the-fly connection string ====================
+# every setting inside the remote name; values containing : or , must be quoted
+
+$ rclone --config data/empty-rclone.conf mkdir ":s3,provider=Other,endpoint='$S3_A_ENDPOINT',access_key_id=$S3_A_ACCESS_KEY,secret_access_key=$S3_A_SECRET_KEY:config-free"
+
+$ rclone --config data/empty-rclone.conf copy data/source/pdfs ":s3,provider=Other,endpoint='$S3_A_ENDPOINT',access_key_id=$S3_A_ACCESS_KEY,secret_access_key=$S3_A_SECRET_KEY:config-free/via-connection-string" -v
+2026/11/02 10:18:26 INFO  : invoice-001.pdf: Copied (new)
+2026/11/02 10:18:26 INFO  : reports/q3-report.pdf: Copied (new)
+2026/11/02 10:18:26 INFO  : 
+Transferred:   	    1.166 KiB / 1.166 KiB, 100%, 0 B/s, ETA -
+Checks:                 0 / 0, -, Listed 3
+Transferred:            2 / 2, 100%
+Elapsed time:         0.0s
+
+# downside: the secret is part of the command line -> visible in ps, shell history, CI logs
+
+==================== B. Backend flags ====================
+
+$ rclone --config data/empty-rclone.conf lsf -R :s3:config-free --s3-provider Other --s3-endpoint "$S3_A_ENDPOINT" --s3-access-key-id "$S3_A_ACCESS_KEY" --s3-secret-access-key "$S3_A_SECRET_KEY"
+via-connection-string/invoice-001.pdf
+via-connection-string/reports/q3-report.pdf
+via-connection-string/
+via-connection-string/reports/
+# same downside as A: secrets in argv
+
+==================== C. Environment variables for the unnamed :s3: backend ====================
+# every --s3-xxx flag can be given as RCLONE_S3_XXX
+
+$ export RCLONE_S3_PROVIDER=Other RCLONE_S3_ENDPOINT="$S3_A_ENDPOINT" RCLONE_S3_ACCESS_KEY_ID="$S3_A_ACCESS_KEY" RCLONE_S3_SECRET_ACCESS_KEY="$S3_A_SECRET_KEY"
+
+$ rclone --config data/empty-rclone.conf copy data/source/docs :s3:config-free/via-env -v
+2026/11/02 10:18:26 INFO  : readme.txt: Copied (new)
+2026/11/02 10:18:26 INFO  : notes/2026/todo.txt: Copied (new)
+2026/11/02 10:18:26 INFO  : notes/2026/meeting-notes.txt: Copied (new)
+2026/11/02 10:18:26 INFO  : 
+Transferred:   	        142 B / 142 B, 100%, 0 B/s, ETA -
+Checks:                 0 / 0, -, Listed 5
+Transferred:            3 / 3, 100%
+Elapsed time:         0.0s
+
+
+$ rclone --config data/empty-rclone.conf tree :s3:config-free
+/
+├── via-connection-string
+│   ├── invoice-001.pdf
+│   └── reports
+│       └── q3-report.pdf
+└── via-env
+    ├── notes
+    │   └── 2026
+    │       ├── meeting-notes.txt
+    │       └── todo.txt
+    └── readme.txt
+
+5 directories, 5 files
+# limitation: only ONE set of :s3: settings at a time
+
+$ clear_s3_env
+
+==================== D. Named remotes defined only by environment variables ====================
+# RCLONE_CONFIG_<NAME>_<OPTION> creates remote <name>: in memory. Two providers, two credential sets, at once:
+
+$ export RCLONE_CONFIG_PROVA_TYPE=s3 RCLONE_CONFIG_PROVA_PROVIDER=Other RCLONE_CONFIG_PROVA_ENDPOINT="$S3_A_ENDPOINT" RCLONE_CONFIG_PROVA_ACCESS_KEY_ID="$S3_A_ACCESS_KEY" RCLONE_CONFIG_PROVA_SECRET_ACCESS_KEY="$S3_A_SECRET_KEY"
+
+$ export RCLONE_CONFIG_PROVB_TYPE=s3 RCLONE_CONFIG_PROVB_PROVIDER=Other RCLONE_CONFIG_PROVB_ENDPOINT="$S3_B_ENDPOINT" RCLONE_CONFIG_PROVB_ACCESS_KEY_ID="$S3_B_ACCESS_KEY" RCLONE_CONFIG_PROVB_SECRET_ACCESS_KEY="$S3_B_SECRET_KEY"
+
+$ rclone --config data/empty-rclone.conf listremotes   # remotes exist, yet the config file is empty
+prova:
+provb:
+
+$ rclone --config data/empty-rclone.conf mkdir provb:replica
+
+==================== E. Different credentials + endpoints in ONE operation ====================
+# copy endpoint A -> endpoint B: each side authenticates with its own keys
+
+$ rclone --config data/empty-rclone.conf copy prova:config-free provb:replica -v
+2026/11/02 10:18:27 INFO  : via-connection-string/invoice-001.pdf: Copied (new)
+2026/11/02 10:18:27 INFO  : via-env/readme.txt: Copied (new)
+2026/11/02 10:18:27 INFO  : via-connection-string/reports/q3-report.pdf: Copied (new)
+2026/11/02 10:18:27 INFO  : via-env/notes/2026/meeting-notes.txt: Copied (new)
+2026/11/02 10:18:27 INFO  : via-env/notes/2026/todo.txt: Copied (new)
+2026/11/02 10:18:27 INFO  : 
+Transferred:   	    1.305 KiB / 1.305 KiB, 100%, 0 B/s, ETA -
+Checks:                 0 / 0, -, Listed 10
+Transferred:            5 / 5, 100%
+Elapsed time:         0.0s
+
+
+$ rclone --config data/empty-rclone.conf check prova:config-free provb:replica
+2026/11/02 10:18:27 NOTICE: S3 bucket replica: 0 differences found
+2026/11/02 10:18:27 NOTICE: S3 bucket replica: 5 matching files
+# styles are interchangeable: a connection string with endpoint B keys reads what the named remote provb: wrote
+
+$ rclone --config data/empty-rclone.conf lsf ":s3,provider=Other,endpoint='$S3_B_ENDPOINT',access_key_id=$S3_B_ACCESS_KEY,secret_access_key=$S3_B_SECRET_KEY:replica"
+via-connection-string/
+via-env/
+
+==================== F. Credentials really are checked ====================
+# endpoint B's keys against endpoint A must fail
+
+$ rclone --config data/empty-rclone.conf lsd :s3: --s3-provider Other --s3-endpoint "$S3_A_ENDPOINT" --s3-access-key-id "$S3_B_ACCESS_KEY" --s3-secret-access-key "$S3_B_SECRET_KEY" --retries 1 --low-level-retries 1
+2026/11/02 10:18:27 ERROR : error listing: operation error S3: ListBuckets, https response error StatusCode: 403, RequestID: , HostID: , api error InvalidAccessKeyId: The Access Key Id you provided does not exist in our records.
+2026/11/02 10:18:27 NOTICE: Failed to lsd with 2 errors: last error was: operation error S3: ListBuckets, https response error StatusCode: 403, RequestID: , HostID: , api error InvalidAccessKeyId: The Access Key Id you provided does not exist in our records.
+(exit code 1)
+
+==================== G. The config file is still empty ====================
+
+$ wc -c data/empty-rclone.conf; ls ~/.config/rclone/ 2>&1
+0 data/empty-rclone.conf
