@@ -1,0 +1,295 @@
+
+==================== 1. Listing ====================
+
+$ rclone ls data/source                 # every file, with size (recursive)
+104857600 videos/lecture-100MB.bin
+      598 pdfs/invoice-001.pdf
+      596 pdfs/reports/q3-report.pdf
+       49 docs/readme.txt
+       55 docs/notes/2026/meeting-notes.txt
+       38 docs/notes/2026/todo.txt
+
+$ rclone lsd data/source                # directories at the top level
+        4096 2026-11-01 16:47:20        -1 docs
+        4096 2026-11-01 16:46:45        -1 pdfs
+        4096 2026-11-01 16:46:45        -1 videos
+
+$ rclone lsf -R --format pst data/source # path;size;modtime, machine-readable
+docs/;-1;2026-11-01 16:47:20
+pdfs/;-1;2026-11-01 16:46:45
+videos/;-1;2026-11-01 16:46:45
+videos/lecture-100MB.bin;104857600;2026-11-01 16:46:45
+docs/notes/;-1;2026-11-01 16:46:45
+docs/readme.txt;49;2026-11-01 16:47:20
+pdfs/invoice-001.pdf;598;2026-11-01 16:46:45
+pdfs/reports/;-1;2026-11-01 16:46:45
+docs/notes/2026/;-1;2026-11-01 16:46:45
+docs/notes/2026/meeting-notes.txt;55;2026-11-01 16:46:45
+docs/notes/2026/todo.txt;38;2026-11-01 16:46:45
+pdfs/reports/q3-report.pdf;596;2026-11-01 16:46:45
+
+$ rclone tree data/source
+/
+├── docs
+│   ├── notes
+│   │   └── 2026
+│   │       ├── meeting-notes.txt
+│   │       └── todo.txt
+│   └── readme.txt
+├── pdfs
+│   ├── invoice-001.pdf
+│   └── reports
+│       └── q3-report.pdf
+└── videos
+    └── lecture-100MB.bin
+
+6 directories, 6 files
+
+$ rclone size data/source
+Total objects: 6
+Total size: 100.001 MiB (104858936 Byte)
+
+==================== 2. copy: new files only, never deletes ====================
+
+$ rclone copy data/source data/site-a -v
+2026/11/01 16:47:44 INFO  : docs/readme.txt: Copied (new)
+2026/11/01 16:47:44 INFO  : docs/notes/2026/todo.txt: Copied (new)
+2026/11/01 16:47:44 INFO  : docs/notes/2026/meeting-notes.txt: Copied (new)
+2026/11/01 16:47:44 INFO  : pdfs/invoice-001.pdf: Copied (new)
+2026/11/01 16:47:44 INFO  : pdfs/reports/q3-report.pdf: Copied (new)
+2026/11/01 16:47:44 INFO  : videos/lecture-100MB.bin: Copied (new)
+2026/11/01 16:47:44 INFO  : docs/notes/2026: Set directory modification time (using DirSetModTime)
+2026/11/01 16:47:44 INFO  : pdfs/reports: Set directory modification time (using DirSetModTime)
+2026/11/01 16:47:44 INFO  : docs/notes: Set directory modification time (using DirSetModTime)
+2026/11/01 16:47:44 INFO  : videos: Set directory modification time (using DirSetModTime)
+2026/11/01 16:47:44 INFO  : docs: Set directory modification time (using DirSetModTime)
+2026/11/01 16:47:44 INFO  : pdfs: Set directory modification time (using DirSetModTime)
+2026/11/01 16:47:44 INFO  : 
+Transferred:   	  100.001 MiB / 100.001 MiB, 100%, 0 B/s, ETA -
+Checks:                 0 / 0, -, Listed 12
+Transferred:            6 / 6, 100%
+Elapsed time:         0.1s
+
+# running the SAME copy again: everything matches by size+modtime, nothing is transferred
+
+$ rclone copy data/source data/site-a -v
+2026/11/01 16:47:44 INFO  : There was nothing to transfer
+2026/11/01 16:47:44 INFO  : 
+Transferred:   	          0 B / 0 B, -, 0 B/s, ETA -
+Checks:                 6 / 6, 100%, Listed 24
+Elapsed time:         0.0s
+
+# a file that exists only at the destination survives copy
+
+$ echo 'only at site-a' > data/site-a/extra-at-destination.txt
+
+$ rclone copy data/source data/site-a -v
+2026/11/01 16:47:44 INFO  : There was nothing to transfer
+2026/11/01 16:47:44 INFO  : 
+Transferred:   	          0 B / 0 B, -, 0 B/s, ETA -
+Checks:                 6 / 6, 100%, Listed 25
+Elapsed time:         0.0s
+
+
+$ rclone lsf data/site-a
+docs/
+extra-at-destination.txt
+pdfs/
+videos/
+# an updated source file is copied again (size/modtime changed)
+
+$ echo 'second line' >> data/source/docs/readme.txt
+
+$ rclone copy data/source data/site-a -v
+2026/11/01 16:47:44 INFO  : docs/readme.txt: Copied (replaced existing)
+2026/11/01 16:47:44 INFO  : docs: Set directory modification time (using SetModTime)
+2026/11/01 16:47:44 INFO  : 
+Transferred:   	         61 B / 61 B, 100%, 0 B/s, ETA -
+Checks:                 6 / 6, 100%, Listed 25
+Transferred:            1 / 1, 100%
+Elapsed time:         0.0s
+
+
+==================== 3. move: copy, then delete from the source ====================
+
+$ mkdir -p data/inbox/2026 data/site-a/processed && echo 'uploaded report' > data/inbox/upload-1.txt && echo 'uploaded slide' > data/inbox/2026/upload-2.txt
+
+$ rclone move data/inbox data/site-a/processed -v
+2026/11/01 16:47:44 INFO  : Local file system at data/site-a/processed: Server side directory move failed - fallback to file moves: can't copy directory - destination already exists
+2026/11/01 16:47:44 INFO  : upload-1.txt: Moved (server-side)
+2026/11/01 16:47:44 INFO  : 2026/upload-2.txt: Moved (server-side)
+2026/11/01 16:47:44 INFO  : 2026: Set directory modification time (using DirSetModTime)
+2026/11/01 16:47:44 INFO  : 
+Transferred:   	         31 B / 31 B, 100%, 0 B/s, ETA -
+Checks:                 0 / 0, -, Listed 3
+Renamed:                2
+Transferred:            2 / 2, 100%
+Server Side Moves:      2 @ 31 B
+Elapsed time:         0.0s
+
+
+$ rclone lsf -R data/inbox   # files are gone from the source, the empty 2026/ folder stays
+2026/
+
+$ rclone lsf -R data/site-a/processed
+2026/
+upload-1.txt
+2026/upload-2.txt
+# --delete-empty-src-dirs also removes the emptied source folders
+
+$ echo 'late upload' > data/inbox/2026/upload-3.txt
+
+$ rclone move data/inbox data/site-a/processed -v --delete-empty-src-dirs
+2026/11/01 16:47:45 INFO  : Local file system at data/site-a/processed: Server side directory move failed - fallback to file moves: can't copy directory - destination already exists
+2026/11/01 16:47:45 INFO  : 2026: Set directory modification time (using SetModTime)
+2026/11/01 16:47:45 INFO  : 2026/upload-3.txt: Moved (server-side)
+2026/11/01 16:47:45 INFO  : 2026: Set directory modification time (using SetModTime)
+2026/11/01 16:47:45 INFO  : 2026: Removing directory
+2026/11/01 16:47:45 INFO  : 
+Transferred:   	         12 B / 12 B, 100%, 0 B/s, ETA -
+Checks:                 0 / 0, -, Listed 5
+Deleted:                0 (files), 1 (dirs), 0 B (freed)
+Renamed:                1
+Transferred:            1 / 1, 100%
+Server Side Moves:      1 @ 12 B
+Elapsed time:         0.0s
+
+
+$ rclone lsf -R data/inbox
+# if the destination folder does NOT exist yet, local->local move just renames the whole directory (no data copied)
+
+==================== 4. sync: make the destination identical to the source ====================
+
+$ rclone sync data/source data/site-b -v
+2026/11/01 16:47:45 INFO  : docs/readme.txt: Copied (new)
+2026/11/01 16:47:45 INFO  : docs/notes/2026/meeting-notes.txt: Copied (new)
+2026/11/01 16:47:45 INFO  : pdfs/invoice-001.pdf: Copied (new)
+2026/11/01 16:47:45 INFO  : docs/notes/2026/todo.txt: Copied (new)
+2026/11/01 16:47:45 INFO  : pdfs/reports/q3-report.pdf: Copied (new)
+2026/11/01 16:47:45 INFO  : videos/lecture-100MB.bin: Copied (new)
+2026/11/01 16:47:45 INFO  : docs/notes/2026: Set directory modification time (using DirSetModTime)
+2026/11/01 16:47:45 INFO  : pdfs/reports: Set directory modification time (using DirSetModTime)
+2026/11/01 16:47:45 INFO  : docs/notes: Set directory modification time (using DirSetModTime)
+2026/11/01 16:47:45 INFO  : videos: Set directory modification time (using DirSetModTime)
+2026/11/01 16:47:45 INFO  : docs: Set directory modification time (using DirSetModTime)
+2026/11/01 16:47:45 INFO  : pdfs: Set directory modification time (using DirSetModTime)
+2026/11/01 16:47:45 INFO  : 
+Transferred:   	  100.001 MiB / 100.001 MiB, 100%, 0 B/s, ETA -
+Checks:                 0 / 0, -, Listed 12
+Transferred:            6 / 6, 100%
+Elapsed time:         0.2s
+
+
+$ echo 'stale file' > data/site-b/old-export.csv
+# --dry-run first: shows what WOULD be deleted, changes nothing
+
+$ rclone sync data/source data/site-b --dry-run
+2026/11/01 16:47:46 NOTICE: old-export.csv: Skipped delete as --dry-run is set (size 11)
+2026/11/01 16:47:46 NOTICE: 
+Transferred:   	          0 B / 0 B, -, 0 B/s, ETA -
+Checks:                 7 / 7, 100%, Listed 25
+Deleted:                1 (files), 0 (dirs), 11 B (freed)
+Elapsed time:         0.0s
+
+
+$ rclone sync data/source data/site-b -v
+2026/11/01 16:47:46 INFO  : old-export.csv: Deleted
+2026/11/01 16:47:46 INFO  : There was nothing to transfer
+2026/11/01 16:47:46 INFO  : 
+Transferred:   	          0 B / 0 B, -, 0 B/s, ETA -
+Checks:                 7 / 7, 100%, Listed 25
+Deleted:                1 (files), 0 (dirs), 11 B (freed)
+Elapsed time:         0.0s
+
+
+$ rclone lsf data/site-b   # old-export.csv is gone
+docs/
+pdfs/
+videos/
+
+==================== 5. Deleting from a destination ====================
+
+$ rclone deletefile data/site-a/extra-at-destination.txt -v        # one file
+2026/11/01 16:47:46 INFO  : extra-at-destination.txt: Deleted
+
+$ rclone delete data/site-a --include '*.txt' --dry-run            # filter preview
+2026/11/01 16:47:46 NOTICE: processed/upload-1.txt: Skipped delete as --dry-run is set (size 16)
+2026/11/01 16:47:46 NOTICE: processed/2026/upload-3.txt: Skipped delete as --dry-run is set (size 12)
+2026/11/01 16:47:46 NOTICE: docs/notes/2026/todo.txt: Skipped delete as --dry-run is set (size 38)
+2026/11/01 16:47:46 NOTICE: processed/2026/upload-2.txt: Skipped delete as --dry-run is set (size 15)
+2026/11/01 16:47:46 NOTICE: docs/notes/2026/meeting-notes.txt: Skipped delete as --dry-run is set (size 55)
+2026/11/01 16:47:46 NOTICE: docs/readme.txt: Skipped delete as --dry-run is set (size 61)
+
+$ rclone delete data/site-a/processed -v                           # all files under a path
+2026/11/01 16:47:46 INFO  : 2026/upload-2.txt: Deleted
+2026/11/01 16:47:46 INFO  : upload-1.txt: Deleted
+2026/11/01 16:47:46 INFO  : 2026/upload-3.txt: Deleted
+
+$ rclone rmdirs data/site-a -v                                     # remove now-empty directories
+2026/11/01 16:47:47 INFO  : processed/2026: Removing directory
+2026/11/01 16:47:47 INFO  : processed: Removing directory
+
+$ rclone lsf -R data/site-a
+docs/
+pdfs/
+videos/
+videos/lecture-100MB.bin
+docs/notes/
+docs/readme.txt
+docs/notes/2026/
+pdfs/invoice-001.pdf
+pdfs/reports/
+docs/notes/2026/meeting-notes.txt
+docs/notes/2026/todo.txt
+pdfs/reports/q3-report.pdf
+
+==================== 6. check: are two locations identical? ====================
+
+$ rclone check data/source data/site-b                      # compares sizes + hashes (MD5/SHA1 for local)
+2026/11/01 16:47:47 NOTICE: Local file system at data/site-b: 0 differences found
+2026/11/01 16:47:47 NOTICE: Local file system at data/site-b: 6 matching files
+# corrupt a file WITHOUT changing its size or modtime (like silent bit rot or a bad disk)
+
+$ printf '%-37s\n' 'TAMPERED' > data/site-b/docs/notes/2026/todo.txt   # same 38 bytes
+
+$ touch -r data/source/docs/notes/2026/todo.txt data/site-b/docs/notes/2026/todo.txt   # same modtime, different content
+
+$ rclone check data/source data/site-b
+2026/11/01 16:47:47 ERROR : docs/notes/2026/todo.txt: md5 differ
+2026/11/01 16:47:47 NOTICE: Local file system at data/site-b: 1 differences found
+2026/11/01 16:47:47 NOTICE: Local file system at data/site-b: 1 errors while checking
+2026/11/01 16:47:47 NOTICE: Local file system at data/site-b: 5 matching files
+2026/11/01 16:47:47 NOTICE: Failed to check: 1 differences found
+(exit code 1)
+# copy compares size+modtime by default, so it MISSES this change:
+
+$ rclone copy data/source data/site-b -v --dry-run
+2026/11/01 16:47:47 INFO  : There was nothing to transfer
+2026/11/01 16:47:47 NOTICE: 
+Transferred:   	          0 B / 0 B, -, 0 B/s, ETA -
+Checks:                 6 / 6, 100%, Listed 24
+Elapsed time:         0.0s
+
+# --checksum compares hashes instead and catches it
+
+$ rclone copy data/source data/site-b -v --checksum
+2026/11/01 16:47:48 INFO  : docs/notes/2026/todo.txt: Copied (replaced existing)
+2026/11/01 16:47:48 INFO  : docs/notes/2026: Set directory modification time (using SetModTime)
+2026/11/01 16:47:48 INFO  : docs/notes: Set directory modification time (using SetModTime)
+2026/11/01 16:47:48 INFO  : docs: Set directory modification time (using SetModTime)
+2026/11/01 16:47:48 INFO  : 
+Transferred:   	         38 B / 38 B, 100%, 0 B/s, ETA -
+Checks:                 6 / 6, 100%, Listed 24
+Transferred:            1 / 1, 100%
+Elapsed time:         0.1s
+
+
+$ rclone check data/source data/site-b --combined -   # per-file report: = same, * differ, + only in src, - only in dst
+= pdfs/invoice-001.pdf
+= pdfs/reports/q3-report.pdf
+= docs/notes/2026/todo.txt
+= docs/readme.txt
+= docs/notes/2026/meeting-notes.txt
+= videos/lecture-100MB.bin
+2026/11/01 16:47:48 NOTICE: Local file system at data/site-b: 0 differences found
+2026/11/01 16:47:48 NOTICE: Local file system at data/site-b: 6 matching files

@@ -5,4 +5,4 @@ data/
 .env
 
 # Runtime logs written by transfer.sh
-logs/
+/logs/

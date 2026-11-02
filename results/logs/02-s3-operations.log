@@ -1,0 +1,164 @@
+
+==================== 0. Which config is in use? ====================
+
+$ rclone config file                    # RCLONE_CONFIG="" -> no file at all
+Configuration is in memory only
+
+$ env | grep ^RCLONE_S3_ | sed "s/=.*/=<set>/"   # settings come from the environment
+RCLONE_S3_PROVIDER=<set>
+RCLONE_S3_ACCESS_KEY_ID=<set>
+RCLONE_S3_SECRET_ACCESS_KEY=<set>
+RCLONE_S3_ENDPOINT=<set>
+
+==================== 1. Create buckets ====================
+
+$ rclone mkdir :s3:videos
+
+$ rclone mkdir :s3:backups
+
+$ rclone lsd :s3:                       # list buckets
+          -1 2026-11-02 10:17:20        -1 backups
+          -1 2026-11-02 10:17:19        -1 videos
+
+==================== 2. Upload ====================
+
+$ rclone copy data/source :s3:videos -v --stats-one-line
+2026/11/02 10:17:20 INFO  : pdfs/reports/q3-report.pdf: Copied (new)
+2026/11/02 10:17:20 INFO  : pdfs/invoice-001.pdf: Copied (new)
+2026/11/02 10:17:20 INFO  : docs/notes/2026/meeting-notes.txt: Copied (new)
+2026/11/02 10:17:20 INFO  : docs/readme.txt: Copied (new)
+2026/11/02 10:17:20 INFO  : docs/notes/2026/todo.txt: Copied (new)
+2026/11/02 10:17:22 INFO  : videos/lecture-100MB.bin: Copied (new)
+2026/11/02 10:17:22 INFO  :   100.002 MiB / 100.002 MiB, 100%, 50.001 MiB/s, ETA 0s
+
+==================== 3. List objects ====================
+
+$ rclone ls :s3:videos
+       55 docs/notes/2026/meeting-notes.txt
+       38 docs/notes/2026/todo.txt
+       49 docs/readme.txt
+      598 pdfs/invoice-001.pdf
+      596 pdfs/reports/q3-report.pdf
+104857600 videos/lecture-100MB.bin
+
+$ rclone lsf -R --format "pth" --hash MD5 :s3:videos   # path;modtime;MD5
+docs/notes/2026/meeting-notes.txt;2026-11-01 16:46:45;7c295decf40ab5d0373e6aa535f9dd8b
+docs/notes/2026/todo.txt;2026-11-01 16:46:45;5eb451171622c8fda403289911f49110
+docs/readme.txt;2026-11-01 16:47:48;cb1c4da4e460f321e9a71964c62e24df
+pdfs/invoice-001.pdf;2026-11-01 16:46:45;71696f3313bbaba36dfea29ee8952849
+pdfs/reports/q3-report.pdf;2026-11-01 16:46:45;752d3a92f89cc07cb06dd76e1cc0e751
+videos/lecture-100MB.bin;2026-11-01 16:46:45;242422368158d6a00416b2462413e254
+docs/;2026-11-02 10:17:22;
+docs/notes/;2026-11-02 10:17:22;
+docs/notes/2026/;2026-11-02 10:17:22;
+pdfs/;2026-11-02 10:17:22;
+pdfs/reports/;2026-11-02 10:17:22;
+videos/;2026-11-02 10:17:22;
+
+$ rclone tree :s3:videos
+/
+├── docs
+│   ├── notes
+│   │   └── 2026
+│   │       ├── meeting-notes.txt
+│   │       └── todo.txt
+│   └── readme.txt
+├── pdfs
+│   ├── invoice-001.pdf
+│   └── reports
+│       └── q3-report.pdf
+└── videos
+    └── lecture-100MB.bin
+
+6 directories, 6 files
+
+$ rclone size :s3:videos
+Total objects: 6
+Total size: 100.001 MiB (104858936 Byte)
+# S3 has no real folders: docs/notes/ is just a common prefix of object keys
+
+$ rclone lsjson :s3:videos/docs --recursive | head -12
+[
+{"Path":"notes/2026/meeting-notes.txt","Name":"meeting-notes.txt","Size":55,"MimeType":"text/plain; charset=utf-8","ModTime":"2026-11-01T16:46:45.193774622+05:30","IsDir":false},
+{"Path":"notes/2026/todo.txt","Name":"todo.txt","Size":38,"MimeType":"text/plain; charset=utf-8","ModTime":"2026-11-01T16:46:45.193774622+05:30","IsDir":false},
+{"Path":"readme.txt","Name":"readme.txt","Size":49,"MimeType":"text/plain; charset=utf-8","ModTime":"2026-11-01T16:47:48.411557216+05:30","IsDir":false},
+{"Path":"notes","Name":"notes","Size":-1,"MimeType":"inode/directory","ModTime":"2026-11-02T10:17:23.158519326+05:30","IsDir":true},
+{"Path":"notes/2026","Name":"2026","Size":-1,"MimeType":"inode/directory","ModTime":"2026-11-02T10:17:23.158519326+05:30","IsDir":true}
+]
+
+==================== 4. Download ====================
+
+$ rclone copy :s3:videos/pdfs data/downloaded/pdfs -v
+2026/11/02 10:17:23 INFO  : reports/q3-report.pdf: Copied (new)
+2026/11/02 10:17:23 INFO  : invoice-001.pdf: Copied (new)
+2026/11/02 10:17:23 INFO  : 
+Transferred:   	    1.166 KiB / 1.166 KiB, 100%, 0 B/s, ETA -
+Checks:                 0 / 0, -, Listed 3
+Transferred:            2 / 2, 100%
+Elapsed time:         0.0s
+
+
+$ rclone copy :s3:videos/videos/lecture-100MB.bin data/downloaded/ -v --stats-one-line
+2026/11/02 10:17:23 INFO  : lecture-100MB.bin: Copied (new)
+2026/11/02 10:17:23 INFO  :       100 MiB / 100 MiB, 100%, 0 B/s, ETA -
+
+$ rclone check data/source/pdfs data/downloaded/pdfs
+2026/11/02 10:17:23 NOTICE: Local file system at data/downloaded/pdfs: 0 differences found
+2026/11/02 10:17:23 NOTICE: Local file system at data/downloaded/pdfs: 2 matching files
+
+$ cmp data/source/videos/lecture-100MB.bin data/downloaded/lecture-100MB.bin && echo "100MB file: byte-identical"
+100MB file: byte-identical
+
+==================== 5. Copy between two buckets (same endpoint) ====================
+# both buckets live on the same server, so rclone asks the server to copy (no data through this machine)
+
+$ rclone copy :s3:videos :s3:backups -v
+2026/11/02 10:17:24 INFO  : docs/readme.txt: Copied (server-side copy)
+2026/11/02 10:17:24 INFO  : pdfs/invoice-001.pdf: Copied (server-side copy)
+2026/11/02 10:17:24 INFO  : docs/notes/2026/meeting-notes.txt: Copied (server-side copy)
+2026/11/02 10:17:24 INFO  : docs/notes/2026/todo.txt: Copied (server-side copy)
+2026/11/02 10:17:24 INFO  : pdfs/reports/q3-report.pdf: Copied (server-side copy)
+2026/11/02 10:17:25 INFO  : videos/lecture-100MB.bin: Copied (server-side copy)
+2026/11/02 10:17:25 INFO  : 
+Transferred:   	  100.001 MiB / 100.001 MiB, 100%, 0 B/s, ETA -
+Checks:                 0 / 0, -, Listed 12
+Transferred:            6 / 6, 100%
+Server Side Copies:     6 @ 100.001 MiB
+Elapsed time:         0.5s
+
+
+$ rclone check :s3:videos :s3:backups
+2026/11/02 10:17:25 NOTICE: S3 bucket backups: 0 differences found
+2026/11/02 10:17:25 NOTICE: S3 bucket backups: 6 matching files
+# upload integrity: local file MD5 vs object ETag (MD5) on the server
+
+$ rclone check data/source :s3:videos
+2026/11/02 10:17:25 NOTICE: S3 bucket videos: 0 differences found
+2026/11/02 10:17:25 NOTICE: S3 bucket videos: 6 matching files
+
+==================== 6. Delete objects ====================
+
+$ rclone deletefile :s3:backups/docs/readme.txt -v              # one object
+2026/11/02 10:17:25 INFO  : readme.txt: Deleted
+
+$ rclone delete :s3:backups --include "*.pdf" -v                # by filter
+2026/11/02 10:17:25 INFO  : pdfs/invoice-001.pdf: Deleted
+2026/11/02 10:17:25 INFO  : pdfs/reports/q3-report.pdf: Deleted
+
+$ rclone lsf -R :s3:backups
+docs/notes/2026/meeting-notes.txt
+docs/notes/2026/todo.txt
+videos/lecture-100MB.bin
+docs/
+docs/notes/
+docs/notes/2026/
+videos/
+
+$ rclone purge :s3:backups -v                                   # all objects + the bucket
+2026/11/02 10:17:26 INFO  : docs/notes/2026/meeting-notes.txt: Deleted
+2026/11/02 10:17:26 INFO  : docs/notes/2026/todo.txt: Deleted
+2026/11/02 10:17:26 INFO  : videos/lecture-100MB.bin: Deleted
+2026/11/02 10:17:26 INFO  : S3 bucket backups: Bucket "backups" deleted
+
+$ rclone lsd :s3:
+          -1 2026-11-02 10:17:21        -1 videos
